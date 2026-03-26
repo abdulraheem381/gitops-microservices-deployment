@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: payment
-        image: raheemboutique/payment:latest
+        image: abdulraheem381/raheemboutique-payment:b31bd09
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3004

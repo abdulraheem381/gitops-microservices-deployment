@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: raheemboutique/frontend:latest
+        image: abdulraheem381/raheemboutique-frontend:b31bd09
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3000
