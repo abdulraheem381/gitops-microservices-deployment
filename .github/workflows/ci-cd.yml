@@ -1,0 +1,206 @@
+name: CI/CD Pipeline — Build, Test & Push
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  # ──────────────────────────────────────────────
+  # 1. Lint & Test — Backend Services
+  # ──────────────────────────────────────────────
+  test-catalog:
+    name: Test Catalog Service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/catalog
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: services/catalog/package-lock.json
+      - run: npm ci || npm install
+      - name: Healthcheck smoke test
+        run: |
+          node index.js &
+          sleep 3
+          curl -f http://localhost:3001/health
+          curl -f http://localhost:3001/api/products
+          echo "✅ Catalog service smoke test passed"
+
+  test-cart:
+    name: Test Cart Service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/cart
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: services/cart/package-lock.json
+      - run: npm ci || npm install
+      - name: Healthcheck smoke test
+        run: |
+          node index.js &
+          sleep 3
+          curl -f http://localhost:3002/health
+          echo "✅ Cart service smoke test passed"
+
+  test-order:
+    name: Test Order Service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/order
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: services/order/package-lock.json
+      - run: npm ci || npm install
+      - name: Healthcheck smoke test
+        run: |
+          node index.js &
+          sleep 3
+          curl -f http://localhost:3003/health
+          echo "✅ Order service smoke test passed"
+
+  test-payment:
+    name: Test Payment Service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/payment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: services/payment/package-lock.json
+      - run: npm ci || npm install
+      - name: Healthcheck smoke test
+        run: |
+          node index.js &
+          sleep 3
+          curl -f http://localhost:3004/health
+          echo "✅ Payment service smoke test passed"
+
+  test-frontend:
+    name: Test Frontend (Build Check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: services/frontend/package-lock.json
+      - run: npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+      - name: Next.js build
+        run: npm run build
+
+  # ──────────────────────────────────────────────
+  # 2. Build & Push Docker Images (only on main)
+  # ──────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs:
+      - test-catalog
+      - test-cart
+      - test-order
+      - test-payment
+      - test-frontend
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    strategy:
+      matrix:
+        service:
+          - name: catalog
+            context: ./services/catalog
+            port: 3001
+          - name: cart
+            context: ./services/cart
+            port: 3002
+          - name: order
+            context: ./services/order
+            port: 3003
+          - name: payment
+            context: ./services/payment
+            port: 3004
+          - name: frontend
+            context: ./services/frontend
+            port: 3000
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/raheemboutique-${{ matrix.service.name }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+            type=ref,event=branch
+
+      - name: Build & Push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ──────────────────────────────────────────────
+  # 3. Update K8s manifests with new image tag
+  # ──────────────────────────────────────────────
+  update-manifests:
+    name: Update K8s Manifests
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update image tags in K8s manifests
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          for svc in catalog cart order payment frontend; do
+            sed -i "s|image: raheemboutique/${svc}:.*|image: ${{ secrets.DOCKERHUB_USERNAME }}/raheemboutique-${svc}:${SHORT_SHA}|" k8s/${svc}.yaml
+          done
+
+      - name: Commit updated manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/
+          git diff --cached --quiet || git commit -m "ci: update image tags to ${GITHUB_SHA::7} [skip ci]"
+          git push
