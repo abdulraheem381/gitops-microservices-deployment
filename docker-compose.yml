@@ -1,0 +1,54 @@
+services:
+  catalog:
+    build:
+      context: ./services/catalog
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+
+  cart:
+    build:
+      context: ./services/cart
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - CATALOG_URL=http://catalog:3001
+    depends_on:
+      - catalog
+
+  order:
+    build:
+      context: ./services/order
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - CART_URL=http://cart:3002
+      - PAYMENT_URL=http://payment:3004
+    depends_on:
+      - cart
+      - payment
+
+  payment:
+    build:
+      context: ./services/payment
+    ports:
+      - "3004:3004"
+    environment:
+      - PORT=3004
+
+  frontend:
+    build:
+      context: ./services/frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_CATALOG_URL=http://localhost:3001
+      - NEXT_PUBLIC_CART_URL=http://localhost:3002
+      - NEXT_PUBLIC_ORDER_URL=http://localhost:3003
+    depends_on:
+      - catalog
+      - cart
+      - order
