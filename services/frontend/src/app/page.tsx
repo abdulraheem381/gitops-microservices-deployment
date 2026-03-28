@@ -19,18 +19,17 @@ export default function Home() {
   const orderUrl = process.env.NEXT_PUBLIC_ORDER_URL || 'http://localhost:3003';
 
   useEffect(() => {
-    let storedId = localStorage.getItem('userId');
-    if (!storedId) {
-      storedId = uuidv4();
-      localStorage.setItem('userId', storedId);
+    const currentUserId = localStorage.getItem('userId') || uuidv4();
+    if (!localStorage.getItem('userId')) {
+      localStorage.setItem('userId', currentUserId);
     }
-    setUserId(storedId);
+    setUserId(currentUserId);
 
     const fetchData = async () => {
       try {
         const prodRes = await axios.get(`${catalogUrl}/api/products`);
         setProducts(prodRes.data);
-        const cartRes = await axios.get(`${cartUrl}/api/cart/${storedId}`);
+        const cartRes = await axios.get(`${cartUrl}/api/cart/${currentUserId}`);
         setCart(cartRes.data);
       } catch (err) {
         console.error("Error fetching data:", err);
@@ -85,7 +84,7 @@ export default function Home() {
     );
   }
 
-  const cartTotal = cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
+  const cartTotal = cart.reduce((sum: number, item: CartItem) => sum + (item.product.price * item.quantity), 0);
 
   return (
     <div className="flex flex-col lg:flex-row gap-8">
